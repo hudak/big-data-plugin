@@ -22,18 +22,6 @@
 
 package org.pentaho.di.job.entries.spark;
 
-import static org.pentaho.di.job.entry.validator.AndValidator.putValidators;
-import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.*;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.StreamTokenizer;
-import java.io.StringReader;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import com.google.common.annotations.VisibleForTesting;
 import org.pentaho.di.cluster.SlaveServer;
 import org.pentaho.di.core.CheckResultInterface;
@@ -58,6 +46,20 @@ import org.pentaho.di.repository.ObjectId;
 import org.pentaho.di.repository.Repository;
 import org.pentaho.metastore.api.IMetaStore;
 import org.w3c.dom.Node;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.StreamTokenizer;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.pentaho.di.job.entry.validator.AndValidator.putValidators;
+import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.andValidator;
+import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.fileExistsValidator;
+import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.notBlankValidator;
 
 /**
  * This job entry submits a JAR to Spark and executes a class. It uses the spark-submit script to submit a command like
@@ -89,14 +91,6 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
   private String driverMemory; // memory allocation config param for the driver
 
   protected Process proc; // the process for the spark-submit command
-
-  public JobEntrySparkSubmit( String n ) {
-    super( n, "" );
-  }
-
-  public JobEntrySparkSubmit() {
-    this( "" );
-  }
 
   public Object clone() {
     JobEntrySparkSubmit je = (JobEntrySparkSubmit) super.clone();

@@ -22,9 +22,6 @@
 
 package org.pentaho.di.ui.job.entries.spark;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
@@ -34,7 +31,6 @@ import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.events.ShellAdapter;
 import org.eclipse.swt.events.ShellEvent;
-import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
@@ -58,9 +54,9 @@ import org.pentaho.di.job.entries.spark.JobEntrySparkSubmit;
 import org.pentaho.di.job.entry.JobEntryDialogInterface;
 import org.pentaho.di.job.entry.JobEntryInterface;
 import org.pentaho.di.repository.Repository;
-import org.pentaho.di.ui.core.gui.GUIResource;
 import org.pentaho.di.ui.core.ConstUI;
 import org.pentaho.di.ui.core.PropsUI;
+import org.pentaho.di.ui.core.gui.GUIResource;
 import org.pentaho.di.ui.core.gui.WindowProperty;
 import org.pentaho.di.ui.core.widget.ColumnInfo;
 import org.pentaho.di.ui.core.widget.ComboVar;
@@ -69,6 +65,9 @@ import org.pentaho.di.ui.core.widget.TextVar;
 import org.pentaho.di.ui.job.dialog.JobDialog;
 import org.pentaho.di.ui.job.entry.JobEntryDialog;
 import org.pentaho.di.ui.trans.step.BaseStepDialog;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Dialog that allows you to enter the settings for a Spark submit job entry.
@@ -576,7 +575,7 @@ public class JobEntrySparkSubmitDialog extends JobEntryDialog implements JobEntr
     Shell shell = new Shell( display );
 
     JobEntrySparkSubmitDialog dialog =
-        new JobEntrySparkSubmitDialog( shell, new JobEntrySparkSubmit( "Spark submit job entry" ), null, new JobMeta() );
+        new JobEntrySparkSubmitDialog( shell, new JobEntrySparkSubmit(), null, new JobMeta() );
 
     dialog.open();
   }
