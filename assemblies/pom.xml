@@ -40,6 +40,7 @@
       <modules>
         <module>samples</module>
         <module>features</module>
+        <module>pmr-base</module>
         <module>pmr-libraries</module>
         <module>legacy-plugin</module>
         <module>standalone</module>
