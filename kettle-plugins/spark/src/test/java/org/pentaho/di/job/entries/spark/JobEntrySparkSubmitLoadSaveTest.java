@@ -22,33 +22,62 @@
 
 package org.pentaho.di.job.entries.spark;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import org.pentaho.di.job.entry.loadSave.JobEntryLoadSaveTestSupport;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.util.concurrent.Futures;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.runners.MockitoJUnitRunner;
+import org.pentaho.big.data.api.cluster.service.locator.NamedClusterServiceLocator;
+import org.pentaho.di.core.exception.KettleException;
+import org.pentaho.di.job.entry.loadSave.LoadSaveTester;
 import org.pentaho.di.trans.steps.loadsave.validator.FieldLoadSaveValidator;
 import org.pentaho.di.trans.steps.loadsave.validator.MapLoadSaveValidator;
 import org.pentaho.di.trans.steps.loadsave.validator.StringLoadSaveValidator;
 
-import static java.util.Arrays.asList;
+import java.util.concurrent.ExecutorService;
 
-public class JobEntrySparkSubmitLoadSaveTest extends JobEntryLoadSaveTestSupport<JobEntrySparkSubmit> {
-  @Override
-  protected Class<JobEntrySparkSubmit> getJobEntryClass() {
-    return JobEntrySparkSubmit.class;
+@RunWith( MockitoJUnitRunner.class )
+public class JobEntrySparkSubmitLoadSaveTest extends LoadSaveTester<JobEntrySparkSubmit> {
+
+  private static final ImmutableList<String> COMMON_ATTRIBUTES = ImmutableList.of(
+    "scriptPath", "master", "jar", "className", "args", "configParams", "driverMemory",
+    "executorMemory", "blockExecution", "jobType", "pyFile", "libs" );
+  private static final ImmutableMap<String, String> GETTERS = ImmutableMap.of();
+  private static final ImmutableMap<String, String> SETTERS = ImmutableMap.of();
+  private static final ImmutableMap<String, FieldLoadSaveValidator<?>>
+    ATTRIBUTE_VALIDATORS = ImmutableMap.of();
+  private static final ImmutableMap<String, FieldLoadSaveValidator<?>>
+    TYPE_VALIDATORS = ImmutableMap.of(
+    "java.util.Map<java.lang.String,java.lang.String>",
+    new MapLoadSaveValidator<>( new StringLoadSaveValidator(), new StringLoadSaveValidator() )
+  );
+
+  @Mock NamedClusterServiceLocator serviceLocator;
+
+  public JobEntrySparkSubmitLoadSaveTest() {
+    super( JobEntrySparkSubmit.class, JobEntrySparkSubmitLoadSaveTest.COMMON_ATTRIBUTES,
+      JobEntrySparkSubmitLoadSaveTest.GETTERS, JobEntrySparkSubmitLoadSaveTest.SETTERS,
+      JobEntrySparkSubmitLoadSaveTest.ATTRIBUTE_VALIDATORS, JobEntrySparkSubmitLoadSaveTest.TYPE_VALIDATORS );
   }
 
-  @Override
-  protected Map<String, FieldLoadSaveValidator<?>> createTypeValidatorsMap() {
-    Map<String, FieldLoadSaveValidator<?>> validators = new HashMap<>();
-
-    validators.put( "java.util.Map<java.lang.String,java.lang.String>", new MapLoadSaveValidator<>(
-        new StringLoadSaveValidator(), new StringLoadSaveValidator() ) );
-    return validators;
+  @Test
+  public void repoRoundTrip() throws KettleException {
+    testRepoRoundTrip();
   }
-  @Override
-  protected List<String> listCommonAttributes() {
-    return asList( "scriptPath", "master", "jar", "className", "args", "configParams", "driverMemory",
-        "executorMemory", "blockExecution", "jobType", "pyFile", "libs" );
+
+  @Test
+  public void xmlRoundTrip() throws KettleException {
+    testXmlRoundTrip();
+  }
+
+  @Test
+  public void cloneRoundTrip() throws Exception {
+    testClone();
+  }
+
+  @Override public JobEntrySparkSubmit createMeta() {
+    return new JobEntrySparkSubmit( serviceLocator, ( job ) -> Futures.immediateCancelledFuture() );
   }
 }

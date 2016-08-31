@@ -24,17 +24,17 @@ package org.pentaho.di.job.entries.spark;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.StreamTokenizer;
-import java.io.StringReader;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-
+import com.google.common.base.Splitter;
+import com.google.common.base.Strings;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
+import org.pentaho.big.data.api.cluster.service.locator.NamedClusterServiceLocator;
+import org.pentaho.bigdata.api.spark.SparkJob;
+import org.pentaho.bigdata.api.spark.SparkJobBuilder;
+import org.pentaho.bigdata.api.spark.SparkService;
 import org.pentaho.di.cluster.SlaveServer;
 import org.pentaho.di.core.CheckResultInterface;
 import org.pentaho.di.core.Const;
@@ -44,6 +44,7 @@ import org.pentaho.di.core.database.DatabaseMeta;
 import org.pentaho.di.core.exception.KettleDatabaseException;
 import org.pentaho.di.core.exception.KettleException;
 import org.pentaho.di.core.exception.KettleXMLException;
+import org.pentaho.di.core.logging.LogChannelInterface;
 import org.pentaho.di.core.variables.VariableSpace;
 import org.pentaho.di.core.xml.XMLHandler;
 import org.pentaho.di.i18n.BaseMessages;
@@ -58,10 +59,24 @@ import org.pentaho.di.repository.Repository;
 import org.pentaho.metastore.api.IMetaStore;
 import org.w3c.dom.Node;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.StreamTokenizer;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import static org.pentaho.di.job.entry.validator.AndValidator.putValidators;
-import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.andValidator;
-import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.fileExistsValidator;
-import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.notBlankValidator;
+import static org.pentaho.di.job.entry.validator.JobEntryValidatorUtils.*;
 
 /**
  * This job entry submits a JAR to Spark and executes a class. It uses the spark-submit script to submit a command like
@@ -98,19 +113,14 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
   private String executorMemory; // memory allocation config param for the executor
   private String driverMemory; // memory allocation config param for the driver
 
-  protected Process proc; // the process for the spark-submit command
+  private final List<Runnable> afterExecution = Collections.synchronizedList( Lists.newLinkedList() );
+  private final NamedClusterServiceLocator namedClusterServiceLocator;
+  private final Function<Job, ListenableFuture<Boolean>> jobStoppedListener;
 
-  public JobEntrySparkSubmit( String n ) {
-    super( n, "" );
-  }
-
-  public JobEntrySparkSubmit() {
-    this( "" );
-  }
-
-  public Object clone() {
-    JobEntrySparkSubmit je = (JobEntrySparkSubmit) super.clone();
-    return je;
+  public JobEntrySparkSubmit( NamedClusterServiceLocator namedClusterServiceLocator,
+                              Function<Job, ListenableFuture<Boolean>> jobStoppedListener ) {
+    this.namedClusterServiceLocator = namedClusterServiceLocator;
+    this.jobStoppedListener = jobStoppedListener;
   }
 
   /**
@@ -460,66 +470,27 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
     this.pyFile = pyFile;
   }
 
-  /**
-   * Returns the spark-submit command as a list of strings. e.g. <path to spark-submit> --class <main-class> --master
-   * <master-url> --deploy-mode <deploy-mode> --conf <key>=<value> <application-jar> \ [application-arguments]
-   *
-   * @return The spark-submit command
-   */
-  public List<String> getCmds() throws IOException {
-    List<String> cmds = new ArrayList<String>();
-
-    cmds.add( environmentSubstitute( scriptPath ) );
-    cmds.add( "--master" );
-    cmds.add( environmentSubstitute( master ) );
-
-    for ( String confParam : configParams ) {
-      cmds.add( "--conf" );
-      cmds.add( environmentSubstitute( confParam ) );
-    }
-
-    if ( !Const.isEmpty( driverMemory ) ) {
-      cmds.add( "--driver-memory" );
-      cmds.add( environmentSubstitute( driverMemory ) );
-    }
-
-    if ( !Const.isEmpty( executorMemory ) ) {
-      cmds.add( "--executor-memory" );
-      cmds.add( environmentSubstitute( executorMemory ) );
-    }
+  @Deprecated
+  public List<String> getCmds() {
+    List<String> cmds = new ArrayList<>();
 
     switch( jobType ) {
       case JOB_TYPE_JAVA_SCALA: {
-        if ( !Const.isEmpty( className ) ) {
-          cmds.add( "--class" );
-          cmds.add( environmentSubstitute( className ) );
-        }
-
-        if ( !libs.isEmpty() ) {
-          cmds.add( "--jars" );
-          cmds.add( environmentSubstitute( Joiner.on( ',' ).join( libs.keySet() ) ) );
-        }
-
         cmds.add( environmentSubstitute( jar ) );
 
         break;
       }
       case JOB_TYPE_PYTHON: {
-        if ( !libs.isEmpty() ) {
-          cmds.add( "--py-files" );
-          cmds.add( environmentSubstitute( Joiner.on( ',' ).join( libs.keySet() ) ) );
-        }
-
         cmds.add( environmentSubstitute( pyFile ) );
 
         break;
       }
     }
 
-    if ( !Const.isEmpty( args ) ) {
-      List<String> argArray = parseCommandLine( args );
+    if ( !Strings.isNullOrEmpty( args ) ) {
+      List<String> argArray = parseCommandLine();
       for ( String anArg : argArray ) {
-        if ( !Const.isEmpty( anArg ) ) {
+        if ( !Strings.isNullOrEmpty( anArg ) ) {
           cmds.add( anArg );
         }
       }
@@ -531,24 +502,24 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
   @VisibleForTesting
   protected boolean validate() {
     boolean valid = true;
-    if ( Const.isEmpty( scriptPath ) || !new File( environmentSubstitute( scriptPath ) ).exists() ) {
-      logError( BaseMessages.getString( PKG, "JobEntrySparkSubmit.Error.SparkSubmitPathInvalid" ) );
+    if ( getSparkRoot() == null ) {
+      logError( getString( "JobEntrySparkSubmit.Error.SparkSubmitPathInvalid" ) );
       valid = false;
     }
 
-    if ( Const.isEmpty( master ) ) {
-      logError( BaseMessages.getString( PKG, "JobEntrySparkSubmit.Error.MasterURLEmpty" ) );
+    if ( Strings.isNullOrEmpty( master ) ) {
+      logError( getString( "JobEntrySparkSubmit.Error.MasterURLEmpty" ) );
       valid = false;
     }
 
     if ( JOB_TYPE_JAVA_SCALA.equals( getJobType() ) ) {
-      if ( Const.isEmpty( jar ) ) {
-        logError( BaseMessages.getString( PKG, "JobEntrySparkSubmit.Error.JarPathEmpty" ) );
+      if ( Strings.isNullOrEmpty( jar ) ) {
+        logError( getString( "JobEntrySparkSubmit.Error.JarPathEmpty" ) );
         valid = false;
       }
     } else {
-      if ( Const.isEmpty( pyFile ) ) {
-        logError( BaseMessages.getString( PKG, "JobEntrySparkSubmit.Error.PyFilePathEmpty" ) );
+      if ( Strings.isNullOrEmpty( pyFile ) ) {
+        logError( getString( "JobEntrySparkSubmit.Error.PyFilePathEmpty" ) );
         valid = false;
       }
     }
@@ -561,120 +532,147 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
    *
    * @return The Result of the operation
    */
-  public Result execute( Result result, int nr ) {
+  public Result execute( Result result, int nr ) throws KettleException {
     if ( !validate() ) {
+      logError( getString( getString( "JobEntrySparkSubmit.Error.SubmittingScript", "validation failed" ) ) );
       result.setResult( false );
       return result;
     }
 
+    final SparkService service;
     try {
-      List<String> cmds = getCmds();
-
-      logBasic( "Submitting Spark Script" );
-
-      if ( log.isDetailed() ) {
-        logDetailed( cmds.toString() );
-      }
-
-      // Build the environment variable list...
-      ProcessBuilder procBuilder = new ProcessBuilder( cmds );
-      Map<String, String> env = procBuilder.environment();
-      String[] variables = listVariables();
-      for ( String variable : variables ) {
-        env.put( variable, getVariable( variable ) );
-      }
-      proc = procBuilder.start();
-
-      String[] jobSubmittedPatterns = new String[] { "tracking URL:" };
-
-      final AtomicBoolean jobSubmitted = new AtomicBoolean( false );
-
-      // any error message?
-      PatternMatchingStreamLogger errorLogger =
-        new PatternMatchingStreamLogger( log, proc.getErrorStream(), jobSubmittedPatterns, jobSubmitted );
-
-      // any output?
-      PatternMatchingStreamLogger outputLogger =
-        new PatternMatchingStreamLogger( log, proc.getInputStream(), jobSubmittedPatterns, jobSubmitted );
-
-      if ( !blockExecution ) {
-        PatternMatchingStreamLogger.PatternMatchedListener cb =
-          new PatternMatchingStreamLogger.PatternMatchedListener() {
-            @Override
-            public void onPatternFound( String pattern ) {
-              log.logDebug( "Found match in output, considering job submitted, stopping spark-submit" );
-              jobSubmitted.set( true );
-              proc.destroy();
-            }
-          };
-        errorLogger.addPatternMatchedListener( cb );
-        outputLogger.addPatternMatchedListener( cb );
-      }
-
-      // kick them off
-      Thread errorLoggerThread = new Thread( errorLogger );
-      errorLoggerThread.start();
-      Thread outputLoggerThread = new Thread( outputLogger );
-      outputLoggerThread.start();
-
-      // Stop on job stop
-      final AtomicBoolean processFinished = new AtomicBoolean( false );
-      new Thread( new Runnable() {
-        @Override
-        public void run() {
-          while ( !getParentJob().isStopped() && !processFinished.get() ) {
-            try {
-              Thread.sleep( 5000 );
-            } catch ( InterruptedException e ) {
-              e.printStackTrace();
-            }
-          }
-          proc.destroy();
-        }
-      } ).start();
-
-      proc.waitFor();
-      processFinished.set( true );
-
-      if ( log.isDetailed() ) {
-        logDetailed( "Spark submit finished" );
-      }
-
-      // wait until loggers read all data from stdout and stderr
-      errorLoggerThread.join();
-      outputLoggerThread.join();
-
-      // close the streams
-      // otherwise you get "Too many open files, java.io.IOException" after a lot of iterations
-      proc.getErrorStream().close();
-      proc.getOutputStream().close();
-
-      // What's the exit status?
-      int exitCode;
-      if ( blockExecution ) {
-        exitCode = proc.exitValue();
-      } else {
-        exitCode = jobSubmitted.get() ? 0 : proc.exitValue();
-      }
-
-      result.setExitStatus( exitCode );
-      if ( exitCode != 0 ) {
-        if ( log.isDetailed() ) {
-          logDetailed( BaseMessages.getString( PKG, "JobEntrySparkSubmit.ExitStatus", result.getExitStatus() ) );
-        }
-
-        result.setNrErrors( 1 );
-      }
-
-      result.setResult( exitCode == 0 );
+      // TODO a named cluster should be associated with the service
+      service = namedClusterServiceLocator.getService( null, SparkService.class );
     } catch ( Exception e ) {
-      result.setNrErrors( 1 );
-      logError( BaseMessages.getString( PKG, "JobEntrySparkSubmit.Error.SubmittingScript", e.getMessage() ) );
-      logError( Const.getStackTracker( e ) );
-      result.setResult( false );
+      throw new KettleException( getString( "JobEntrySparkSubmit.Error.SubmittingScript", e.getMessage() ), e );
     }
 
+    // Configure and submit the spark job
+    SparkJob sparkJob = configure( service.createJobBuilder( getEnv() ) ).submit();
+
+    // Ensure spark job started successfully
+    String jobId = Futures.get( sparkJob.getJobId(), KettleException.class );
+    logBasic( getString( "JobEntrySparkSubmit.Start", jobId ) );
+
+    final int exitCode;
+    if ( isBlockExecution() ) {
+      // Cancel spark if parent job stops running for any reason
+      afterExecution.add( sparkJob::cancel );
+      // Also interrupt spark if job is trying to halt
+      ListenableFuture<Boolean> jobStopped = jobStoppedListener.apply( getParentJob() );
+      jobStopped.addListener( sparkJob::cancel, MoreExecutors.directExecutor() );
+
+      // Wait for completion
+      logBasic( getString( "JobEntrySparkSubmit.Block" ) );
+      try {
+        exitCode = Futures.get( sparkJob.getExitCode(), KettleException.class );
+        logDetailed( getString( "JobEntrySparkSubmit.ExitStatus" ), exitCode );
+      } finally {
+        // Stop polling jobStopped
+        jobStopped.cancel( true );
+      }
+    } else {
+      exitCode = 0;
+    }
+
+    // Record results
+    result.setExitStatus( exitCode );
+    result.setNrErrors( exitCode == 0 ? 0 : 1 );
+    result.setResult( exitCode == 0 );
+
     return result;
+  }
+
+  /**
+   * Adds spark arguments (master, driver & executor memory), sets conf values, and configures the Java/Scala/Python app
+   *
+   * @return the builder
+   */
+
+  protected SparkJobBuilder configure( SparkJobBuilder builder ) throws KettleException {
+
+    builder.setSparkArg( "--master", environmentSubstitute( master ) );
+
+    configParams.stream().
+      map( this::environmentSubstitute ).
+      map( Splitter.on( '=' ).limit( 2 ).trimResults()::splitToList ).
+      forEach( conf -> builder.setSparkConf( conf.get( 0 ), conf.get( 1 ) ) );
+
+    if ( !Strings.isNullOrEmpty( driverMemory ) ) {
+      builder.setSparkArg( "--driver-memory", environmentSubstitute( driverMemory ) );
+    }
+
+    if ( !Strings.isNullOrEmpty( executorMemory ) ) {
+      builder.setSparkArg( "--executor-memory", environmentSubstitute( executorMemory ) );
+    }
+
+    switch( jobType ) {
+      case JOB_TYPE_JAVA_SCALA: {
+        if ( !Strings.isNullOrEmpty( className ) ) {
+          builder.setSparkArg( "--class", environmentSubstitute( className ) );
+        }
+
+        if ( !libs.isEmpty() ) {
+          builder.setSparkArg( "--jars", environmentSubstitute( Joiner.on( ',' ).join( libs.keySet() ) ) );
+        }
+
+        builder.setAppResource( environmentSubstitute( jar ) );
+        break;
+      }
+      case JOB_TYPE_PYTHON: {
+        if ( !libs.isEmpty() ) {
+          builder.setSparkArg( "--py-files", environmentSubstitute( Joiner.on( ',' ).join( libs.keySet() ) ) );
+        }
+
+        builder.setAppResource( environmentSubstitute( pyFile ) );
+        break;
+      }
+    }
+
+    if ( !Strings.isNullOrEmpty( args ) ) {
+      builder.addAppArgs( parseCommandLine() );
+    }
+
+    return builder;
+  }
+
+  /**
+   * Starts a recursive search up the file system for the root directory of the spark installation.
+   * {@link #scriptPath} must be set to any file or directory within the installation.
+   * The location of the spark-core jar is used to test the directory
+   *
+   * @return Root directory of spark installation, or null if {@link #scriptPath} is invalid
+   */
+  private File getSparkRoot() {
+    return Optional.ofNullable( Strings.emptyToNull( scriptPath ) ) // Ensure supplied script path is not empty or null
+      .map( this::environmentSubstitute )
+      .map( ( path ) -> new File( path ).getAbsoluteFile() ) // convert to absolute path file
+      .flatMap( this::resolveSparkRoot ) // Start recursive search
+      .orElse( null );
+  }
+
+  /**
+   * Recursive search for the root directory of the spark folder.
+   * <pre>bin/spark-submit</pre> is used to check the given directory.
+   *
+   * @param file starting location (file or folder)
+   * @return root directory if found
+   */
+  private Optional<File> resolveSparkRoot( File file ) {
+    boolean valid = Optional.ofNullable( new File( file, "bin" ).listFiles() )
+      .map( Stream::of ).orElseGet( Stream::empty ) // iterate over jars/ directory
+      .filter( File::isFile ) // Check if file is real
+      .anyMatch( f -> "spark-submit".equals( f.getName() ) );
+
+    // Return if valid, otherwise try parent
+    return valid ? Optional.of( file ) : Optional.ofNullable( file.getParentFile() ).flatMap( this::resolveSparkRoot );
+  }
+
+  private Map<String, String> getEnv() {
+    Map<String, String> env = Maps.newHashMap();
+    env.putAll( Stream.of( listVariables() ).collect( Collectors.toMap( Function.identity(), this::getVariable ) ) );
+    env.computeIfAbsent( "SPARK_HOME", key -> getSparkRoot().getAbsolutePath() );
+    return env;
   }
 
   public boolean evaluates() {
@@ -700,13 +698,12 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
   /**
    * Parse a string into arguments as if it were provided on the command line.
    *
-   * @param commandLineString A command line string.
    * @return List of parsed arguments
    * @throws IOException when the command line could not be parsed
    */
-  public List<String> parseCommandLine( String commandLineString ) throws IOException {
-    List<String> args = new ArrayList<String>();
-    StringReader reader = new StringReader( commandLineString );
+  public List<String> parseCommandLine() {
+    List<String> args = new ArrayList<>();
+    StringReader reader = new StringReader( this.args );
     try {
       StreamTokenizer tokenizer = new StreamTokenizer( reader );
       // Treat a dash as an ordinary character so it gets included in the token
@@ -731,6 +728,8 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
           args.add( s );
         }
       }
+    } catch ( IOException e ) {
+      throw new IllegalArgumentException( e );
     } finally {
       reader.close();
     }
@@ -740,10 +739,23 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
 
   @Override
   public void afterExecution( Job arg0, JobEntryCopy arg1, JobEntryInterface arg2, Result arg3 ) {
-    proc.destroy();
+    synchronized( afterExecution ) {
+      afterExecution.forEach( Runnable::run );
+      afterExecution.clear();
+    }
   }
 
   @Override
   public void beforeExecution( Job arg0, JobEntryCopy arg1, JobEntryInterface arg2 ) {
   }
+
+  @VisibleForTesting
+  protected void setLogChannel( LogChannelInterface log ) {
+    this.log = log;
+  }
+
+  private static String getString( String id, Object... arguments ) {
+    return BaseMessages.getString( PKG, id, arguments );
+  }
+
 }
