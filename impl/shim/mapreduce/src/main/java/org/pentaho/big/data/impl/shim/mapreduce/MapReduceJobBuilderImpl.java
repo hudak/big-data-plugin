@@ -150,7 +150,7 @@ public class MapReduceJobBuilderImpl implements MapReduceJobBuilder {
   }
 
   protected void configure( Configuration conf ) throws Exception {
-    FileSystem fs = hadoopShim.getFileSystem( conf );
+    FileSystem fs = getFileSystem( conf );
     URL[] urls = new URL[] { resolvedJarUrl };
     URLClassLoader loader = new URLClassLoader( urls, hadoopShim.getClass().getClassLoader() );
     conf.setJobName( hadoopJobName );
@@ -235,6 +235,14 @@ public class MapReduceJobBuilderImpl implements MapReduceJobBuilder {
 
     conf.setNumMapTasks( numMapTasks );
     conf.setNumReduceTasks( numReduceTasks );
+  }
+
+  protected FileSystem getFileSystem( Configuration conf ) throws IOException {
+    return hadoopShim.getFileSystem( conf );
+  }
+
+  protected HadoopShim getHadoopShim() {
+    return hadoopShim;
   }
 
   public VariableSpace getVariableSpace() {

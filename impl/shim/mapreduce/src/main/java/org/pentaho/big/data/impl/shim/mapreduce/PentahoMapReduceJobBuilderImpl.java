@@ -23,41 +23,31 @@
 package org.pentaho.big.data.impl.shim.mapreduce;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Maps;
 import com.thoughtworks.xstream.XStream;
-import org.apache.commons.vfs2.FileObject;
 import org.pentaho.big.data.api.cluster.NamedCluster;
 import org.pentaho.bigdata.api.mapreduce.*;
-import org.pentaho.di.core.CheckResultInterface;
-import org.pentaho.di.core.Const;
 import org.pentaho.di.core.exception.KettleException;
 import org.pentaho.di.core.exception.KettleFileException;
 import org.pentaho.di.core.logging.LogChannelInterface;
 import org.pentaho.di.core.logging.LogLevel;
 import org.pentaho.di.core.plugins.PluginInterface;
-import org.pentaho.di.core.row.RowMetaInterface;
 import org.pentaho.di.core.row.ValueMetaInterface;
 import org.pentaho.di.core.variables.VariableSpace;
 import org.pentaho.di.core.vfs.KettleVFS;
-import org.pentaho.di.i18n.BaseMessages;
 import org.pentaho.di.trans.Trans;
 import org.pentaho.di.trans.TransConfiguration;
 import org.pentaho.di.trans.TransMeta;
-import org.pentaho.di.trans.step.StepMeta;
-import org.pentaho.di.trans.step.StepMetaInterface;
 import org.pentaho.di.version.BuildVersion;
 import org.pentaho.hadoop.PluginPropertiesUtil;
-import org.pentaho.hadoop.mapreduce.InKeyValueOrdinals;
-import org.pentaho.hadoop.mapreduce.OutKeyValueOrdinals;
 import org.pentaho.hadoop.shim.HadoopConfiguration;
 import org.pentaho.hadoop.shim.api.Configuration;
 import org.pentaho.hadoop.shim.api.fs.FileSystem;
 import org.pentaho.hadoop.shim.api.fs.Path;
-import org.pentaho.hadoop.shim.spi.HadoopShim;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 import java.util.Properties;
 
 /**
@@ -68,11 +58,7 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
   public static final String MAPREDUCE_APPLICATION_CLASSPATH = "mapreduce.application.classpath";
   public static final String DEFAULT_MAPREDUCE_APPLICATION_CLASSPATH =
     "$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/*,$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/lib/*";
-  public static final String PENTAHO_MAPREDUCE_PROPERTY_USE_DISTRIBUTED_CACHE = "pmr.use.distributed.cache";
   public static final String PENTAHO_MAPREDUCE_PROPERTY_PMR_LIBRARIES_ARCHIVE_FILE = "pmr.libraries.archive.file";
-  public static final String PENTAHO_MAPREDUCE_PROPERTY_KETTLE_HDFS_INSTALL_DIR = "pmr.kettle.dfs.install.dir";
-  public static final String PENTAHO_MAPREDUCE_PROPERTY_KETTLE_INSTALLATION_ID = "pmr.kettle.installation.id";
-  public static final String PENTAHO_MAPREDUCE_PROPERTY_ADDITIONAL_PLUGINS = "pmr.kettle.additional.plugins";
   public static final String PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_INPUT_STEP_NOT_SPECIFIED =
     "PentahoMapReduceJobBuilderImpl.InputStepNotSpecified";
   public static final String PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_INPUT_STEP_NOT_FOUND =
@@ -105,12 +91,6 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
   public static final String TRANSFORMATION_REDUCE_XML = "transformation-reduce-xml";
   public static final String TRANSFORMATION_REDUCE_INPUT_STEPNAME = "transformation-reduce-input-stepname";
   public static final String TRANSFORMATION_REDUCE_OUTPUT_STEPNAME = "transformation-reduce-output-stepname";
-  public static final String JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_CLEANING_OUTPUT_PATH =
-    "JobEntryHadoopTransJobExecutor.CleaningOutputPath";
-  public static final String JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_FAILED_TO_CLEAN_OUTPUT_PATH =
-    "JobEntryHadoopTransJobExecutor.FailedToCleanOutputPath";
-  public static final String JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_ERROR_CLEANING_OUTPUT_PATH =
-    "JobEntryHadoopTransJobExecutor.ErrorCleaningOutputPath";
   public static final String JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_KETTLE_HDFS_INSTALL_DIR_MISSING =
     "JobEntryHadoopTransJobExecutor.KettleHdfsInstallDirMissing";
   public static final String JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_INSTALLATION_OF_KETTLE_FAILED =
@@ -123,28 +103,16 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
   public static final String JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_KETTLE_INSTALLATION_MISSING_FROM =
     "JobEntryHadoopTransJobExecutor.KettleInstallationMissingFrom";
   public static final String VARIABLE_SPACE = "variableSpace";
-  private final HadoopConfiguration hadoopConfiguration;
-  private final HadoopShim hadoopShim;
   private final LogChannelInterface log;
-  private final PluginInterface pluginInterface;
-  private final FileObject vfsPluginDirectory;
-  private final Properties pmrProperties;
   private final List<TransformationVisitorService> visitorServices;
-  private final TransFactory transFactory;
-  private final PMRArchiveGetter pmrArchiveGetter;
+  private final PMRService pmrService;
   private final String installId;
   private boolean cleanOutputPath;
   private LogLevel logLevel;
-  private String mapperTransformationXml;
-  private String mapperInputStep;
-  private String mapperOutputStep;
-  private String combinerTransformationXml;
-  private String combinerInputStep;
-  private String combinerOutputStep;
-  private String reducerTransformationXml;
-  private String reducerInputStep;
-  private String reducerOutputStep;
+  private final Map<MapReduceTransformation.Type, MapReduceTransformation> transformations =
+    Maps.newEnumMap( MapReduceTransformation.Type.class );
 
+  @Deprecated
   public PentahoMapReduceJobBuilderImpl( NamedCluster namedCluster,
                                          HadoopConfiguration hadoopConfiguration,
                                          LogChannelInterface log,
@@ -152,30 +120,21 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
                                          Properties pmrProperties,
                                          List<TransformationVisitorService> visitorServices )
     throws KettleFileException {
-    this( namedCluster, hadoopConfiguration, log, variableSpace, pluginInterface,
-      KettleVFS.getFileObject( pluginInterface.getPluginDirectory().getPath() ), pmrProperties,
-      new TransFactory(), new PMRArchiveGetter( pluginInterface, pmrProperties ), visitorServices );
+    this( namedCluster, hadoopConfiguration, log, variableSpace, visitorServices,
+      new PMRService( log, pmrProperties, hadoopConfiguration.getHadoopShim(), pluginInterface,
+        KettleVFS::getFileObject ) );
   }
 
-  @VisibleForTesting PentahoMapReduceJobBuilderImpl( NamedCluster namedCluster,
-                                                     HadoopConfiguration hadoopConfiguration,
-                                                     LogChannelInterface log,
-                                                     VariableSpace variableSpace, PluginInterface pluginInterface,
-                                                     FileObject vfsPluginDirectory,
-                                                     Properties pmrProperties, TransFactory transFactory,
-                                                     PMRArchiveGetter pmrArchiveGetter,
-                                                     List<TransformationVisitorService> visitorServices ) {
+
+  PentahoMapReduceJobBuilderImpl( NamedCluster namedCluster, HadoopConfiguration hadoopConfiguration,
+                                  LogChannelInterface log,
+                                  VariableSpace variableSpace,
+                                  List<TransformationVisitorService> visitorServices, PMRService pmrService ) {
     super( namedCluster, hadoopConfiguration.getHadoopShim(), log, variableSpace );
-    this.hadoopConfiguration = hadoopConfiguration;
-    this.hadoopShim = hadoopConfiguration.getHadoopShim();
     this.log = log;
-    this.pluginInterface = pluginInterface;
-    this.vfsPluginDirectory = vfsPluginDirectory;
-    this.pmrProperties = pmrProperties;
-    this.transFactory = transFactory;
     this.installId = buildInstallIdBase( hadoopConfiguration );
-    this.pmrArchiveGetter = pmrArchiveGetter;
     this.visitorServices = visitorServices;
+    this.pmrService = pmrService;
   }
 
   private static String buildInstallIdBase( HadoopConfiguration hadoopConfiguration ) {
@@ -189,28 +148,9 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
     return installId + "-" + hadoopConfiguration.getIdentifier();
   }
 
-  /**
-   * Gets a property from the configuration. If it is missing it will load it from the properties provided. If it
-   * cannot
-   * be found there the default value provided will be used.
-   *
-   * @param conf         Configuration to check for property first.
-   * @param properties   Properties to check for property second.
-   * @param propertyName Name of the property to return
-   * @param defaultValue Default value to use if no property by the given name could be found in {@code conf} or
-   * {@code
-   *                     properties}
-   * @return Value of {@code propertyName}
-   */
-  public static String getProperty( Configuration conf, Properties properties, String propertyName,
-                                    String defaultValue ) {
-    String fromConf = conf.get( propertyName );
-    return !Const.isEmpty( fromConf ) ? fromConf : properties.getProperty( propertyName, defaultValue );
-  }
-
   @Override
   public String getHadoopWritableCompatibleClassName( ValueMetaInterface valueMetaInterface ) {
-    Class<?> hadoopWritableCompatibleClass = hadoopShim.getHadoopWritableCompatibleClass( valueMetaInterface );
+    Class<?> hadoopWritableCompatibleClass = getHadoopShim().getHadoopWritableCompatibleClass( valueMetaInterface );
     if ( hadoopWritableCompatibleClass == null ) {
       return null;
     }
@@ -230,119 +170,32 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
   @Override
   public void verifyTransMeta( TransMeta transMeta, String inputStepName, String outputStepName )
     throws KettleException {
-    // Verify the input step: see that the key/value fields are present...
-    //
-    if ( Const.isEmpty( inputStepName ) ) {
-      throw new KettleException( BaseMessages.getString( PKG,
-        PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_INPUT_STEP_NOT_SPECIFIED ) );
-    }
-    StepMeta inputStepMeta = transMeta.findStep( inputStepName );
-    if ( inputStepMeta == null ) {
-      throw new KettleException(
-        BaseMessages.getString( PKG, PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_INPUT_STEP_NOT_FOUND, inputStepName ) );
-    }
-
-    // Get the fields coming out of the input step...
-    //
-    RowMetaInterface injectorRowMeta = transMeta.getStepFields( inputStepMeta );
-
-    // Verify that the key and value fields are found
-    //
-    InKeyValueOrdinals inOrdinals = new InKeyValueOrdinals( injectorRowMeta );
-    if ( inOrdinals.getKeyOrdinal() < 0 ) {
-      throw new KettleException(
-        BaseMessages.getString( PKG, PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_NO_KEY_ORDINAL, inputStepName ) );
-    }
-    if ( inOrdinals.getValueOrdinal() < 0 ) {
-      throw new KettleException(
-        BaseMessages.getString( PKG, PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_NO_VALUE_ORDINAL, inputStepName ) );
-    }
-
-    // make sure that the input step is enabled (i.e. its outgoing hop
-    // hasn't been disabled)
-    Trans t = transFactory.create( transMeta );
-    t.prepareExecution( null );
-    if ( t.getStepInterface( inputStepName, 0 ) == null ) {
-      throw new KettleException(
-        BaseMessages.getString( PKG, PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_INPUT_HOP_DISABLED, inputStepName ) );
-    }
-
-    // Now verify the output step output of the reducer...
-    //
-    if ( Const.isEmpty( outputStepName ) ) {
-      throw new KettleException( BaseMessages.getString( PKG,
-        PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_OUTPUT_STEP_NOT_SPECIFIED ) );
-    }
-
-    StepMeta outputStepMeta = transMeta.findStep( outputStepName );
-    if ( outputStepMeta == null ) {
-      throw new KettleException(
-        BaseMessages.getString( PKG, PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_OUTPUT_STEP_NOT_FOUND, outputStepName ) );
-    }
-
-    // It's a special step designed to map the output key/value pair fields...
-    //
-    if ( outputStepMeta.getStepMetaInterface() instanceof PentahoMapReduceOutputStepMetaInterface ) {
-      // Get the row fields entering the output step...
-      //
-      RowMetaInterface outputRowMeta = transMeta.getPrevStepFields( outputStepMeta );
-      StepMetaInterface exitMeta = outputStepMeta.getStepMetaInterface();
-
-      List<CheckResultInterface> remarks = new ArrayList<>();
-      ( (PentahoMapReduceOutputStepMetaInterface) exitMeta )
-        .checkPmr( remarks, transMeta, outputStepMeta, outputRowMeta );
-      StringBuilder message = new StringBuilder();
-      for ( CheckResultInterface remark : remarks ) {
-        if ( remark.getType() == CheckResultInterface.TYPE_RESULT_ERROR ) {
-          message.append( message.toString() ).append( Const.CR );
-        }
-      }
-      if ( message.length() > 0 ) {
-        throw new KettleException(
-          BaseMessages.getString( PKG, PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_VALIDATION_ERROR ) + Const.CR + message );
-      }
-    } else {
-      // Any other step: verify that the outKey and outValue fields exist...
-      //
-      RowMetaInterface outputRowMeta = transMeta.getStepFields( outputStepMeta );
-      OutKeyValueOrdinals outOrdinals = new OutKeyValueOrdinals( outputRowMeta );
-      if ( outOrdinals.getKeyOrdinal() < 0 ) {
-        throw new KettleException( BaseMessages.getString( PKG,
-          PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_NO_OUTPUT_KEY_ORDINAL, outputStepName ) );
-      }
-      if ( outOrdinals.getValueOrdinal() < 0 ) {
-        throw new KettleException( BaseMessages.getString( PKG,
-          PENTAHO_MAP_REDUCE_JOB_BUILDER_IMPL_NO_OUTPUT_VALUE_ORDINAL, outputStepName ) );
-      }
-    }
+    pmrService.verifyTransMeta( transMeta, inputStepName, outputStepName, Trans::new );
   }
 
   @Override
   public void setCombinerInfo( String combinerTransformationXml, String combinerInputStep, String combinerOutputStep ) {
-    this.combinerTransformationXml = combinerTransformationXml;
-    this.combinerInputStep = combinerInputStep;
-    this.combinerOutputStep = combinerOutputStep;
+    transformations.put( MapReduceTransformation.Type.COMBINER,
+      convert( combinerTransformationXml, combinerInputStep, combinerOutputStep ) );
   }
 
   @Override
   public void setReducerInfo( String reducerTransformationXml, String reducerInputStep, String reducerOutputStep ) {
-    this.reducerTransformationXml = reducerTransformationXml;
-    this.reducerInputStep = reducerInputStep;
-    this.reducerOutputStep = reducerOutputStep;
+    transformations.put( MapReduceTransformation.Type.REDUCER,
+      convert( reducerTransformationXml, reducerInputStep, reducerOutputStep ) );
   }
 
   @Override
   public void setMapperInfo( String mapperTransformationXml, String mapperInputStep, String mapperOutputStep ) {
-    this.mapperTransformationXml = mapperTransformationXml;
-    this.mapperInputStep = mapperInputStep;
-    this.mapperOutputStep = mapperOutputStep;
+    transformations.put( MapReduceTransformation.Type.MAPPER,
+      convert( mapperTransformationXml, mapperInputStep, mapperOutputStep ) );
   }
 
   @Override
   protected void configure( Configuration conf ) throws Exception {
     callVisitors();
 
-    setMapRunnerClass( hadoopShim.getPentahoMapReduceMapRunnerClass().getCanonicalName() );
+    setMapRunnerClass( getHadoopShim().getPentahoMapReduceMapRunnerClass().getCanonicalName() );
 
     conf.set( TRANSFORMATION_MAP_XML, mapperTransformationXml );
     conf.set( TRANSFORMATION_MAP_INPUT_STEPNAME, mapperInputStep );
@@ -352,15 +205,15 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
       conf.set( TRANSFORMATION_COMBINER_XML, combinerTransformationXml );
       conf.set( TRANSFORMATION_COMBINER_INPUT_STEPNAME, combinerInputStep );
       conf.set( TRANSFORMATION_COMBINER_OUTPUT_STEPNAME, combinerOutputStep );
-      setCombinerClass( hadoopShim.getPentahoMapReduceCombinerClass().getCanonicalName() );
+      setCombinerClass( getHadoopShim().getPentahoMapReduceCombinerClass().getCanonicalName() );
     }
     if ( reducerTransformationXml != null ) {
       conf.set( TRANSFORMATION_REDUCE_XML, reducerTransformationXml );
       conf.set( TRANSFORMATION_REDUCE_INPUT_STEPNAME, reducerInputStep );
       conf.set( TRANSFORMATION_REDUCE_OUTPUT_STEPNAME, reducerOutputStep );
-      setReducerClass( hadoopShim.getPentahoMapReduceReducerClass().getCanonicalName() );
+      setReducerClass( getHadoopShim().getPentahoMapReduceReducerClass().getCanonicalName() );
     }
-    conf.setJarByClass( hadoopShim.getPentahoMapReduceMapRunnerClass() );
+    conf.setJarByClass( getHadoopShim().getPentahoMapReduceMapRunnerClass() );
     conf.set( LOG_LEVEL, logLevel.toString() );
     configureVariableSpace( conf );
     super.configure( conf );
@@ -368,77 +221,14 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
 
   @Override
   protected MapReduceJobAdvanced submit( Configuration conf ) throws IOException {
-    cleanOutputPath( conf );
 
-    FileSystem fs = hadoopShim.getFileSystem( conf );
-
-    if ( Boolean.parseBoolean( getProperty( conf, pmrProperties, PENTAHO_MAPREDUCE_PROPERTY_USE_DISTRIBUTED_CACHE,
-      Boolean.toString( true ) ) ) ) {
-      String installPath =
-        getProperty( conf, pmrProperties, PENTAHO_MAPREDUCE_PROPERTY_KETTLE_HDFS_INSTALL_DIR, null );
-      String installId =
-        getProperty( conf, pmrProperties, PENTAHO_MAPREDUCE_PROPERTY_KETTLE_INSTALLATION_ID, null );
-      try {
-        if ( Const.isEmpty( installPath ) ) {
-          throw new IllegalArgumentException( BaseMessages.getString( PKG,
-            JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_KETTLE_HDFS_INSTALL_DIR_MISSING ) );
-        }
-        if ( Const.isEmpty( installId ) ) {
-          installId = this.installId;
-        }
-        if ( !installPath.endsWith( Const.FILE_SEPARATOR ) ) {
-          installPath += Const.FILE_SEPARATOR;
-        }
-
-        Path kettleEnvInstallDir = fs.asPath( installPath, installId );
-        FileObject pmrLibArchive = pmrArchiveGetter.getPmrArchive( conf );
-
-        // Make sure the version we're attempting to use is installed
-        if ( hadoopShim.getDistributedCacheUtil().isKettleEnvironmentInstalledAt( fs, kettleEnvInstallDir ) ) {
-          log.logDetailed( BaseMessages.getString( PKG, "JobEntryHadoopTransJobExecutor.UsingKettleInstallationFrom",
-            kettleEnvInstallDir.toUri().getPath() ) );
-        } else {
-          // Load additional plugin folders as requested
-          String additionalPluginNames =
-            getProperty( conf, pmrProperties, PENTAHO_MAPREDUCE_PROPERTY_ADDITIONAL_PLUGINS, null );
-          if ( pmrLibArchive == null ) {
-            throw new KettleException(
-              BaseMessages.getString( PKG, JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_UNABLE_TO_LOCATE_ARCHIVE,
-                pmrArchiveGetter.getVfsFilename( conf ) ) );
-          }
-
-          log.logBasic( BaseMessages.getString( PKG, "JobEntryHadoopTransJobExecutor.InstallingKettleAt",
-            kettleEnvInstallDir ) );
-
-          FileObject bigDataPluginFolder = vfsPluginDirectory;
-          hadoopShim.getDistributedCacheUtil()
-            .installKettleEnvironment( pmrLibArchive, fs, kettleEnvInstallDir, bigDataPluginFolder,
-              additionalPluginNames );
-
-          log.logBasic( BaseMessages
-            .getString( PKG, "JobEntryHadoopTransJobExecutor.InstallationOfKettleSuccessful", kettleEnvInstallDir ) );
-        }
-        if ( !hadoopShim.getDistributedCacheUtil().isKettleEnvironmentInstalledAt( fs, kettleEnvInstallDir ) ) {
-          throw new KettleException( BaseMessages.getString( PKG,
-            JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_KETTLE_INSTALLATION_MISSING_FROM,
-            kettleEnvInstallDir.toUri().getPath() ) );
-        }
-
-        log.logBasic( BaseMessages.getString( PKG, JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_CONFIGURING_JOB_WITH_KETTLE_AT,
-          kettleEnvInstallDir.toUri().getPath() ) );
-
-        String mapreduceClasspath =
-          conf.get( MAPREDUCE_APPLICATION_CLASSPATH, DEFAULT_MAPREDUCE_APPLICATION_CLASSPATH );
-        conf.set( MAPREDUCE_APPLICATION_CLASSPATH, CLASSES + mapreduceClasspath );
-
-        hadoopShim.getDistributedCacheUtil().configureWithKettleEnvironment( conf, fs, kettleEnvInstallDir );
-        log.logBasic( MAPREDUCE_APPLICATION_CLASSPATH + ": " + conf.get( MAPREDUCE_APPLICATION_CLASSPATH ) );
-      } catch ( Exception ex ) {
-        throw new IOException(
-          BaseMessages.getString( PKG, JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_INSTALLATION_OF_KETTLE_FAILED ), ex );
-      }
+    if ( cleanOutputPath() ) {
+      FileSystem fileSystem = getFileSystem( conf );
+      Path path = getOutputPath( conf, fileSystem );
+      pmrService.cleanOutputPath( fileSystem, path );
     }
 
+    pmrService.stagePentahoLibraries( conf, getInstallId() );
     return super.submit( conf );
   }
 
@@ -456,64 +246,27 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
     conf.setStrings( VARIABLE_SPACE, xmlVariableSpace );
   }
 
-  @VisibleForTesting
-  void cleanOutputPath( Configuration conf ) throws IOException {
-
-    if ( cleanOutputPath ) {
-      FileSystem fs = hadoopShim.getFileSystem( conf );
-      Path path = getOutputPath( conf, fs );
-      String outputPath = path.toUri().toString();
-      if ( log.isBasic() ) {
-        log.logBasic(
-          BaseMessages.getString( PKG, JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_CLEANING_OUTPUT_PATH, outputPath ) );
-      }
-      try {
-        if ( !fs.exists( path ) ) {
-          // If the path does not exist one could think of it as "already cleaned"
-          return;
-        }
-        if ( !fs.delete( path, true ) ) {
-          if ( log.isBasic() ) {
-            log.logBasic(
-              BaseMessages
-                .getString( PKG, JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_FAILED_TO_CLEAN_OUTPUT_PATH, outputPath ) );
-          }
-        }
-      } catch ( IOException ex ) {
-        throw new IOException(
-          BaseMessages.getString( PKG, JOB_ENTRY_HADOOP_TRANS_JOB_EXECUTOR_ERROR_CLEANING_OUTPUT_PATH, outputPath ),
-          ex );
-      }
-    }
-  }
-
   private void callVisitors() {
-    MapReduceTransformations transformations = new MapReduceTransformations();
-    transformations.setCombiner( convert( combinerTransformationXml ) );
-    transformations.setMapper( convert( mapperTransformationXml ) );
-    transformations.setReducer( convert( reducerTransformationXml ) );
-
     for ( TransformationVisitorService visitorService : visitorServices ) {
       visitorService.visit( transformations );
     }
   }
 
-  private Optional<TransMeta> convert( String xmlString ) {
+  private static MapReduceTransformation convert( String xmlString, String inputStep, String outputStep ) {
     try {
-      if ( xmlString == null ) {
-        return Optional.empty();
-      }
-      TransMeta transMeta = TransConfiguration.fromXML( xmlString ).getTransMeta();
-      return Optional.of( transMeta );
+      return new MapReduceTransformation( TransConfiguration.fromXML( xmlString ), inputStep, outputStep );
     } catch ( KettleException e ) {
-      throw new RuntimeException( "Unable to configure object", e );
+      throw new IllegalArgumentException( "Unable to parse Pentaho Map Reduce transformation config", e );
     }
   }
 
 
-  @VisibleForTesting
   String getInstallId() {
     return installId;
+  }
+
+  protected boolean cleanOutputPath() {
+    return cleanOutputPath;
   }
 
   @VisibleForTesting
@@ -523,23 +276,4 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
     }
   }
 
-  @VisibleForTesting
-  static class PMRArchiveGetter {
-    private final PluginInterface pluginInterface;
-    private final Properties pmrProperties;
-
-    public PMRArchiveGetter( PluginInterface pluginInterface, Properties pmrProperties ) {
-      this.pluginInterface = pluginInterface;
-      this.pmrProperties = pmrProperties;
-    }
-
-    public FileObject getPmrArchive( Configuration conf ) throws KettleFileException {
-      return KettleVFS.getFileObject( getVfsFilename( conf ) );
-    }
-
-    public String getVfsFilename( Configuration conf ) {
-      return pluginInterface.getPluginDirectory().getPath() + Const.FILE_SEPARATOR
-        + getProperty( conf, pmrProperties, PENTAHO_MAPREDUCE_PROPERTY_PMR_LIBRARIES_ARCHIVE_FILE, null );
-    }
-  }
 }

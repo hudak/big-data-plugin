@@ -1,5 +1,6 @@
 package org.pentaho.bigdata.api.mapreduce;
 
+import org.pentaho.di.trans.TransConfiguration;
 import org.pentaho.di.trans.TransMeta;
 
 import java.util.Optional;
@@ -9,7 +10,7 @@ import java.util.Optional;
  */
 public class MapReduceTransformations {
 
-  private Optional<TransMeta> combiner;
+  private MapReduceTransformation combiner;
   private Optional<TransMeta> mapper;
   private Optional<TransMeta> reducer;
 
@@ -19,7 +20,6 @@ public class MapReduceTransformations {
     this.reducer = Optional.empty();
   }
 
-  //<editor-fold desc="Getters & Setters">
   public Optional<TransMeta> getCombiner() {
     return combiner;
   }
@@ -43,5 +43,9 @@ public class MapReduceTransformations {
   public void setReducer( Optional<TransMeta> reducer ) {
     this.reducer = reducer;
   }
-  //</editor-fold>
+
+  public void setCombiner( TransConfiguration transMeta, String inputStep, String outputStep ) {
+    combiner = new MapReduceTransformation( transMeta, inputStep, outputStep );
+  }
+
 }
