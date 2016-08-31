@@ -37,6 +37,7 @@
   </scm>
   <properties>
     <dependency.mockito.revision>1.9.5</dependency.mockito.revision>
+    <dependency.hamcrest.revision>1.3</dependency.hamcrest.revision>
     <dependency.json.revision>7.0-SNAPSHOT</dependency.json.revision>
     <dependency.maven-bundle-plugin.version>2.4.0</dependency.maven-bundle-plugin.version>
     <dependency.httpcomponents.revision>4.4</dependency.httpcomponents.revision>

@@ -73,7 +73,7 @@ public class PatternMatchingStreamLogger implements Runnable {
     listener = pml;
   }
 
-  public static interface PatternMatchedListener {
-    public void onPatternFound( String pattern );
+  public interface PatternMatchedListener {
+    void onPatternFound( String pattern );
   }
 }

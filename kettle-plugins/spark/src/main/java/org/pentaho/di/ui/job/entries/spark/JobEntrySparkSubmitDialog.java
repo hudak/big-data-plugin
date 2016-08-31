@@ -129,18 +129,6 @@ public class JobEntrySparkSubmitDialog extends JobEntryDialog implements JobEntr
   private JobEntrySparkSubmit jobEntry;
   private boolean backupChanged;
 
-  public static void main( String[] a ) {
-    Display display = new Display();
-    PropsUI.init( display, Props.TYPE_PROPERTIES_SPOON );
-    Shell shell = new Shell( display );
-
-    JobEntrySparkSubmitDialog sh =
-        new JobEntrySparkSubmitDialog( shell, new JobEntrySparkSubmit( "Spark submit job entry" ), null,
-            new JobMeta() );
-
-    sh.open();
-  }
-
   public JobEntrySparkSubmitDialog( Shell parent, JobEntryInterface jobEntryInt, Repository rep, JobMeta jobMeta ) {
     super( parent, jobEntryInt, rep, jobMeta );
     jobEntry = (JobEntrySparkSubmit) jobEntryInt;
