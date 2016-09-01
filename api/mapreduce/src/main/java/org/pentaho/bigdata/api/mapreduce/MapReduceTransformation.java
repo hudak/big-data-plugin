@@ -15,7 +15,8 @@ public class MapReduceTransformation {
     MAPPER, COMBINER, REDUCER
   }
 
-  public MapReduceTransformation( TransConfiguration transConfiguration, String inputStep, String outputStep ) {
+  public MapReduceTransformation( Type type, TransConfiguration transConfiguration,
+                                  String inputStep, String outputStep ) {
     this.transConfiguration = transConfiguration;
     this.inputStep = inputStep;
     this.outputStep = outputStep;

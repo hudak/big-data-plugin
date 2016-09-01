@@ -22,11 +22,16 @@
 
 package org.pentaho.big.data.impl.shim.mapreduce;
 
-import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Throwables;
 import com.google.common.collect.Maps;
 import com.thoughtworks.xstream.XStream;
 import org.pentaho.big.data.api.cluster.NamedCluster;
-import org.pentaho.bigdata.api.mapreduce.*;
+import org.pentaho.bigdata.api.mapreduce.MapReduceJobAdvanced;
+import org.pentaho.bigdata.api.mapreduce.MapReduceTransformation;
+import org.pentaho.bigdata.api.mapreduce.MapReduceTransformations;
+import org.pentaho.bigdata.api.mapreduce.PentahoMapReduceJobBuilder;
+import org.pentaho.bigdata.api.mapreduce.TransformationVisitorService;
 import org.pentaho.di.core.exception.KettleException;
 import org.pentaho.di.core.exception.KettleFileException;
 import org.pentaho.di.core.logging.LogChannelInterface;
@@ -46,8 +51,10 @@ import org.pentaho.hadoop.shim.api.fs.FileSystem;
 import org.pentaho.hadoop.shim.api.fs.Path;
 
 import java.io.IOException;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 
 /**
@@ -109,8 +116,7 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
   private final String installId;
   private boolean cleanOutputPath;
   private LogLevel logLevel;
-  private final Map<MapReduceTransformation.Type, MapReduceTransformation> transformations =
-    Maps.newEnumMap( MapReduceTransformation.Type.class );
+  private final MapReduceTransformations transformations = new MapReduceTransformations();
 
   @Deprecated
   public PentahoMapReduceJobBuilderImpl( NamedCluster namedCluster,
@@ -175,20 +181,29 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
 
   @Override
   public void setCombinerInfo( String combinerTransformationXml, String combinerInputStep, String combinerOutputStep ) {
-    transformations.put( MapReduceTransformation.Type.COMBINER,
-      convert( combinerTransformationXml, combinerInputStep, combinerOutputStep ) );
+    setTransInfo( MapReduceTransformation.Type.COMBINER,
+      combinerTransformationXml, combinerInputStep, combinerOutputStep );
   }
 
   @Override
   public void setReducerInfo( String reducerTransformationXml, String reducerInputStep, String reducerOutputStep ) {
-    transformations.put( MapReduceTransformation.Type.REDUCER,
-      convert( reducerTransformationXml, reducerInputStep, reducerOutputStep ) );
+    setTransInfo( MapReduceTransformation.Type.REDUCER, reducerTransformationXml, reducerInputStep, reducerOutputStep );
   }
 
   @Override
   public void setMapperInfo( String mapperTransformationXml, String mapperInputStep, String mapperOutputStep ) {
-    transformations.put( MapReduceTransformation.Type.MAPPER,
-      convert( mapperTransformationXml, mapperInputStep, mapperOutputStep ) );
+    setTransInfo( MapReduceTransformation.Type.MAPPER, mapperTransformationXml, mapperInputStep, mapperOutputStep );
+  }
+
+  private MapReduceTransformation setTransInfo( MapReduceTransformation.Type type, String transConfigXml,
+                                                String inputStep, String outputStep ) {
+    MapReduceTransformation result;
+    try {
+      result = new MapReduceTransformation( type, TransConfiguration.fromXML( transConfigXml ), inputStep, outputStep );
+    } catch ( KettleException e ) {
+      throw new IllegalArgumentException( "Unable to parse Pentaho Map Reduce transformation config", e );
+    }
+    return transformations.put( type, result );
   }
 
   @Override
@@ -197,22 +212,28 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
 
     setMapRunnerClass( getHadoopShim().getPentahoMapReduceMapRunnerClass().getCanonicalName() );
 
-    conf.set( TRANSFORMATION_MAP_XML, mapperTransformationXml );
-    conf.set( TRANSFORMATION_MAP_INPUT_STEPNAME, mapperInputStep );
-    conf.set( TRANSFORMATION_MAP_OUTPUT_STEPNAME, mapperOutputStep );
 
-    if ( combinerTransformationXml != null ) {
-      conf.set( TRANSFORMATION_COMBINER_XML, combinerTransformationXml );
-      conf.set( TRANSFORMATION_COMBINER_INPUT_STEPNAME, combinerInputStep );
-      conf.set( TRANSFORMATION_COMBINER_OUTPUT_STEPNAME, combinerOutputStep );
-      setCombinerClass( getHadoopShim().getPentahoMapReduceCombinerClass().getCanonicalName() );
-    }
-    if ( reducerTransformationXml != null ) {
-      conf.set( TRANSFORMATION_REDUCE_XML, reducerTransformationXml );
-      conf.set( TRANSFORMATION_REDUCE_INPUT_STEPNAME, reducerInputStep );
-      conf.set( TRANSFORMATION_REDUCE_OUTPUT_STEPNAME, reducerOutputStep );
-      setReducerClass( getHadoopShim().getPentahoMapReduceReducerClass().getCanonicalName() );
-    }
+    Preconditions.checkState( transformations.containsKey( MapReduceTransformation.Type.MAPPER ),
+      "mapper transformation is not set" );
+
+    configureTransformation( conf, MapReduceTransformation.Type.MAPPER,
+      TRANSFORMATION_MAP_XML,
+      TRANSFORMATION_MAP_INPUT_STEPNAME,
+      TRANSFORMATION_MAP_OUTPUT_STEPNAME
+    );
+
+    configureTransformation( conf, MapReduceTransformation.Type.COMBINER,
+      TRANSFORMATION_COMBINER_XML,
+      TRANSFORMATION_COMBINER_INPUT_STEPNAME,
+      TRANSFORMATION_COMBINER_OUTPUT_STEPNAME
+    );
+
+    configureTransformation( conf, MapReduceTransformation.Type.REDUCER,
+      TRANSFORMATION_REDUCE_XML,
+      TRANSFORMATION_REDUCE_INPUT_STEPNAME,
+      TRANSFORMATION_REDUCE_OUTPUT_STEPNAME
+    );
+
     conf.setJarByClass( getHadoopShim().getPentahoMapReduceMapRunnerClass() );
     conf.set( LOG_LEVEL, logLevel.toString() );
     configureVariableSpace( conf );
@@ -230,6 +251,16 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
 
     pmrService.stagePentahoLibraries( conf, getInstallId() );
     return super.submit( conf );
+  }
+
+  private void configureTransformation( Configuration conf, MapReduceTransformation.Type type, String xmlProperty,
+                                        String inputStepProperty, String outputStepProperty ) throws Exception {
+    if ( transformations.containsKey( type ) ) {
+      MapReduceTransformation transformation = transformations.get( type );
+      conf.set( xmlProperty, transformation.getTransConfiguration().getXML() );
+      conf.set( inputStepProperty, transformation.getInputStep() );
+      conf.set( outputStepProperty, transformation.getOutputStep() );
+    }
   }
 
   protected void configureVariableSpace( Configuration conf ) {
@@ -252,28 +283,12 @@ public class PentahoMapReduceJobBuilderImpl extends MapReduceJobBuilderImpl impl
     }
   }
 
-  private static MapReduceTransformation convert( String xmlString, String inputStep, String outputStep ) {
-    try {
-      return new MapReduceTransformation( TransConfiguration.fromXML( xmlString ), inputStep, outputStep );
-    } catch ( KettleException e ) {
-      throw new IllegalArgumentException( "Unable to parse Pentaho Map Reduce transformation config", e );
-    }
-  }
-
-
   String getInstallId() {
     return installId;
   }
 
   protected boolean cleanOutputPath() {
     return cleanOutputPath;
-  }
-
-  @VisibleForTesting
-  static class TransFactory {
-    public Trans create( TransMeta transMeta ) {
-      return new Trans( transMeta );
-    }
   }
 
 }
