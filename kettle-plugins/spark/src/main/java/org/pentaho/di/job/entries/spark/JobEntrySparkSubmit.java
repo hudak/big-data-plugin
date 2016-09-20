@@ -572,38 +572,39 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
    */
   public Result execute( Result result, int nr ) throws KettleException {
     if ( !validate() ) {
+      logError( getString( getString( "JobEntrySparkSubmit.Error.SubmittingScript", "validation failed" ) ) );
       result.setResult( false );
       return result;
     }
 
-    final SparkJob sparkJob;
+    final SparkService service;
     try {
       // TODO a named cluster should be associated with the service
-      SparkService service = namedClusterServiceLocator.getService( null, SparkService.class );
-
-      URL[] jars = getSparkRoot()
-        .flatMap( root -> Optional.ofNullable( new File( root, "jars" ).listFiles() ) )
-        .map( Arrays::stream )
-        .orElseThrow( IllegalStateException::new )
-        .map( jar -> {
-          try {
-            return jar.toURI().toURL();
-          } catch ( MalformedURLException e ) {
-            throw new IllegalStateException( e );
-          }
-        } )
-        .toArray( URL[]::new );
-
-      sparkJob = service.createJobBuilder( log, new URLClassLoader( jars ) )
-        .addArguments( getCmds() )
-        .addEnvironmentVariables( getEnv() )
-        .submit();
+      service = namedClusterServiceLocator.getService( null, SparkService.class );
     } catch ( Exception e ) {
-      result.setNrErrors( 1 );
-      logError( getString( "JobEntrySparkSubmit.Error.SubmittingScript", e.getMessage() ), e );
-      result.setResult( false );
-      return result;
+      throw new KettleException( getString( "JobEntrySparkSubmit.Error.SubmittingScript", e.getMessage() ), e );
     }
+
+    URL[] sparkJars = getSparkRoot()
+      .flatMap( root -> Optional.ofNullable( new File( root, "jars" ).listFiles() ) )
+      .map( Arrays::stream )
+      .orElseThrow( () ->
+        new KettleException( getString( "JobEntrySparkSubmit.Error.SubmittingScript", "spark libraries not found" ) )
+      )
+      .map( jar -> {
+        try {
+          return jar.toURI().toURL();
+        } catch ( MalformedURLException e ) {
+          throw new IllegalStateException( e );
+        }
+      } )
+      .toArray( URL[]::new );
+
+    SparkJob sparkJob = service.createJobBuilder( log, ( parent ) -> new URLClassLoader( sparkJars, parent ) )
+      .addArguments( getCmds() )
+      .addEnvironmentVariables( getEnv() )
+      .submit();
+
     // Ensure spark job started successfully
     String jobId = Futures.get( sparkJob.getJobId(), KettleException.class );
     logBasic( getString( "JobEntrySparkSubmit.Start", jobId ) );
@@ -614,15 +615,17 @@ public class JobEntrySparkSubmit extends JobEntryBase implements Cloneable, JobE
       afterExecution.add( sparkJob::cancel );
       // Also interrupt spark if job is trying to halt
       ListenableFuture<Boolean> jobStopped = jobStoppedListener.apply( getParentJob() );
-      jobStopped.addListener( sparkJob::cancel, MoreExecutors.sameThreadExecutor() );
+      jobStopped.addListener( sparkJob::cancel, MoreExecutors.directExecutor() );
 
       // Wait for completion
       logBasic( getString( "JobEntrySparkSubmit.Block" ) );
-      exitCode = Futures.get( sparkJob.getExitCode(), KettleException.class );
-      logDetailed( getString( "JobEntrySparkSubmit.ExitStatus" ), exitCode );
-
-      // Stop polling jobStopped
-      jobStopped.cancel( true );
+      try {
+        exitCode = Futures.get( sparkJob.getExitCode(), KettleException.class );
+        logDetailed( getString( "JobEntrySparkSubmit.ExitStatus" ), exitCode );
+      } finally {
+        // Stop polling jobStopped
+        jobStopped.cancel( true );
+      }
     } else {
       exitCode = 0;
     }

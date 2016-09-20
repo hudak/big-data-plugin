@@ -21,11 +21,15 @@
  ******************************************************************************/
 package org.pentaho.bigdata.api.spark;
 
+import org.pentaho.di.core.exception.KettleException;
 import org.pentaho.di.core.logging.LogChannelInterface;
+
+import java.util.function.UnaryOperator;
 
 /**
  * @author nhudak
  */
 public interface SparkService {
-  SparkJobBuilder createJobBuilder( LogChannelInterface log, ClassLoader sparkLib );
+  SparkJobBuilder createJobBuilder( LogChannelInterface log,
+                                    UnaryOperator<ClassLoader> sparkClassloaderFactory ) throws KettleException;
 }

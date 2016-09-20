@@ -21,6 +21,8 @@
  ******************************************************************************/
 package org.pentaho.bigdata.api.spark;
 
+import org.pentaho.di.core.exception.KettleException;
+
 import java.util.List;
 import java.util.Map;
 
@@ -32,5 +34,5 @@ public interface SparkJobBuilder {
 
   SparkJobBuilder addEnvironmentVariables( Map<String, String> env );
 
-  SparkJob submit();
+  SparkJob submit() throws KettleException;
 }
