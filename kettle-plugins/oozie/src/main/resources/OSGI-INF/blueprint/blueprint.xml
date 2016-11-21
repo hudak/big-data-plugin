@@ -15,7 +15,11 @@
   </bean>
 
   <reference id="namedClusterService" interface="org.pentaho.big.data.api.cluster.NamedClusterService"/>
-  <reference id="namedClusterServiceLocator" interface="org.pentaho.big.data.api.cluster.service.locator.NamedClusterServiceLocator"/>
+  <bean id="namedClusterServiceLocator" init-method="open" destroy-method="close"
+        class="org.pentaho.big.data.api.cluster.service.locator.spi.ClusterServiceTracker">
+    <argument ref="blueprintBundleContext"/>
+    <argument value="org.pentaho.bigdata.api.oozie.OozieService"/>
+  </bean>
   <reference id="runtimeTester" interface="org.pentaho.runtime.test.RuntimeTester"/>
   <reference id="runtimeTestActionService" interface="org.pentaho.runtime.test.action.RuntimeTestActionService"/>
 </blueprint>
