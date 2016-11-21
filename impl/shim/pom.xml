@@ -13,6 +13,7 @@
   <modules>
     <module>common</module>
     <module>initializer</module>
+    <module>remoteServices</module>
     <module>hdfs</module>
     <module>hive</module>
     <module>mapreduce</module>
