@@ -22,30 +22,17 @@
 
 package org.pentaho.big.data.kettle.plugins.pig;
 
-import static org.mockito.Mockito.mock;
-
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.StringReader;
-import java.io.StringWriter;
-import java.net.URL;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Properties;
-
 import org.apache.commons.vfs2.FileSystemException;
 import org.apache.commons.vfs2.VFS;
 import org.apache.pig.ExecType;
 import org.apache.pig.PigServer;
 import org.apache.pig.tools.grunt.GruntParser;
 import org.apache.pig.tools.parameters.ParameterSubstitutionPreprocessor;
+import org.pentaho.big.data.api.cluster.NamedCluster;
 import org.pentaho.big.data.api.cluster.service.locator.NamedClusterServiceLocator;
-import org.pentaho.big.data.api.cluster.service.locator.impl.NamedClusterServiceLocatorImpl;
-import org.pentaho.big.data.api.initializer.ClusterInitializer;
 import org.pentaho.big.data.impl.cluster.NamedClusterManager;
 import org.pentaho.big.data.impl.shim.pig.PigServiceFactoryImpl;
+import org.pentaho.bigdata.api.pig.PigService;
 import org.pentaho.di.core.annotations.JobEntry;
 import org.pentaho.hadoop.shim.ConfigurationException;
 import org.pentaho.hadoop.shim.HadoopConfiguration;
@@ -57,6 +44,21 @@ import org.pentaho.hadoop.shim.spi.PigShim;
 import org.pentaho.runtime.test.RuntimeTester;
 import org.pentaho.runtime.test.action.RuntimeTestActionService;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.StringReader;
+import java.io.StringWriter;
+import java.net.URL;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.same;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 /**
  * Created by bryan on 7/15/15.
  */
@@ -66,13 +68,17 @@ import org.pentaho.runtime.test.action.RuntimeTestActionService;
 public class NoArgJobEntryPigScriptExecutor extends JobEntryPigScriptExecutor {
   private static final HadoopConfigurationProvider provider = initProvider();
 
-  public NoArgJobEntryPigScriptExecutor() throws FileSystemException, ConfigurationException {
+  public NoArgJobEntryPigScriptExecutor() throws Exception {
     super( new NamedClusterManager(), mock( RuntimeTestActionService.class ), mock( RuntimeTester.class ), initNamedClusterServiceLocator() );
   }
 
-  private static NamedClusterServiceLocator initNamedClusterServiceLocator() throws ConfigurationException {
-    NamedClusterServiceLocatorImpl namedClusterServiceLocator = new NamedClusterServiceLocatorImpl( mock( ClusterInitializer.class ) );
-    namedClusterServiceLocator.factoryAdded( new PigServiceFactoryImpl( true, provider.getConfiguration( null ) ), Collections.emptyMap() );
+  private static NamedClusterServiceLocator initNamedClusterServiceLocator() throws Exception {
+    NamedClusterServiceLocator namedClusterServiceLocator = mock( NamedClusterServiceLocator.class );
+    PigServiceFactoryImpl pigServiceFactory = new PigServiceFactoryImpl( true, provider.getConfiguration( null ) );
+
+    when( namedClusterServiceLocator.getService( any( NamedCluster.class ), same( PigService.class ) ) )
+      .then( invocation -> pigServiceFactory.create( (NamedCluster) invocation.getArguments()[ 0 ] ) );
+
     return namedClusterServiceLocator;
   }
 

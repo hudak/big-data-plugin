@@ -27,6 +27,7 @@ import org.pentaho.big.data.api.cluster.NamedCluster;
 /**
  * Created by bryan on 11/5/15.
  */
+@Deprecated
 public interface NamedClusterServiceFactory<T> {
   Class<T> getServiceClass();
   boolean canHandle( NamedCluster namedCluster );
